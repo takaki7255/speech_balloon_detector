@@ -31,12 +31,90 @@ class Point:
 
 
 @dataclass
+class Line:
+    """直線を表すクラス（C++のLine classに相当）"""
+    p1: Point
+    p2: Point
+    y2x: bool  # True: x = a*y + b (縦線), False: y = a*x + b (横線)
+    a: float = 0.0
+    b: float = 0.0
+    
+    def __post_init__(self):
+        self._calc()
+    
+    def _calc(self):
+        """傾きと切片を計算"""
+        if self.y2x:
+            # 縦線: x = a*y + b
+            dy = self.p2.y - self.p1.y
+            if dy == 0:
+                self.a = 0.0
+                self.b = float(min(self.p1.x, self.p2.x))
+            else:
+                self.a = (self.p2.x - self.p1.x) / dy
+                self.b = self.p1.x - self.p1.y * self.a
+        else:
+            # 横線: y = a*x + b
+            dx = self.p2.x - self.p1.x
+            if dx == 0:
+                self.a = 0.0
+                self.b = float(min(self.p1.y, self.p2.y))
+            else:
+                self.a = (self.p2.y - self.p1.y) / dx
+                self.b = self.p1.y - self.p1.x * self.a
+    
+    def judge_area(self, point: Point) -> int:
+        """
+        点が直線のどちら側にあるかを判定
+        戻り値: 0=上/右側, 1=下/左側, 2=直線上
+        """
+        if self.y2x:
+            x, y = point.y, point.x
+        else:
+            x, y = point.x, point.y
+        
+        value = self.a * x + self.b
+        if y > value:
+            return 0
+        elif y < value:
+            return 1
+        else:
+            return 2
+
+
+@dataclass
 class Points:
-    """矩形の4つの角を表すクラス"""
+    """矩形の4つの角を表すクラス（C++のPoints classに相当）"""
     lt: Point  # left-top
     rt: Point  # right-top
     lb: Point  # left-bottom
     rb: Point  # right-bottom
+    
+    # 4辺の直線
+    top_line: Optional[Line] = None
+    bottom_line: Optional[Line] = None
+    left_line: Optional[Line] = None
+    right_line: Optional[Line] = None
+    
+    def renew_line(self):
+        """4辺の直線を再計算（C++のrenew_line()に相当）"""
+        self.top_line = Line(self.lt, self.rt, False)
+        self.bottom_line = Line(self.lb, self.rb, False)
+        self.left_line = Line(self.lb, self.lt, True)
+        self.right_line = Line(self.rb, self.rt, True)
+    
+    def outside(self, p: Point) -> bool:
+        """
+        点が四角形の外部にあるかを判定（C++のoutside()に相当）
+        戻り値: True=外部, False=内部または境界
+        """
+        if not all([self.top_line, self.bottom_line, self.left_line, self.right_line]):
+            self.renew_line()
+        
+        return (self.top_line.judge_area(p) == 1 or
+                self.right_line.judge_area(p) == 0 or
+                self.bottom_line.judge_area(p) == 0 or
+                self.left_line.judge_area(p) == 1)
 
 
 @dataclass 
@@ -94,22 +172,162 @@ class MangaProcessor:
         """
         h, w = img.shape[:2]
         
-        # 単純に左右に分割（実際はより複雑な処理が必要）
-        left_page = img[:, :w//2]
-        right_page = img[:, w//2:]
-        
-        return [left_page, right_page]
+        if w > h:  # 縦<横の場合:見開きだと判断し真ん中で切断
+            # C++と同じ順序: 右ページ→左ページ
+            cut_img_left = img[:, :w//2]      # 左半分（右ページ）
+            cut_img_right = img[:, w//2:]     # 右半分（左ページ）
+            return [cut_img_right, cut_img_left]  # 右ページを先に、左ページを後に
+        else:  # 縦>横の場合:単一ページ画像だと判断しそのまま保存
+            return [img]
     
     def get_page_type(self, page: np.ndarray) -> bool:
         """
         ページ分類：白ページ(False) / 黒ページ(True)
         C++の ClassificationPage::get_page_type() に相当
         """
-        gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY) if len(page.shape) == 3 else page
-        mean_intensity = np.mean(gray)
+        # C++と同じアルゴリズムを実装
+        BLACK_LENGTH_TH = 5
         
-        # 平均輝度で判定（閾値は調整が必要）
-        return mean_intensity < 100  # 100未満なら黒ページ
+        # フレーム存在領域を特定
+        frame_exist_page = self.find_frame_area(page.copy())
+        
+        # 大津の手法で二値化
+        _, frame_exist_page = cv2.threshold(frame_exist_page, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        
+        h, w = frame_exist_page.shape
+        
+        # 上端チェック
+        page_type = True
+        for y in range(3, BLACK_LENGTH_TH):
+            for x in range(w):
+                if frame_exist_page[y, x] != 0:
+                    page_type = False
+                    break
+            if not page_type:
+                break
+        if page_type:
+            return True
+        
+        # 下端チェック
+        page_type = True
+        for y in range(h - 3, h - BLACK_LENGTH_TH, -1):
+            for x in range(w):
+                if frame_exist_page[y, x] != 0:
+                    page_type = False
+                    break
+            if not page_type:
+                break
+        if page_type:
+            return True
+        
+        # 右端チェック
+        page_type = True
+        for y in range(h):
+            for x in range(w - 3, w - BLACK_LENGTH_TH, -1):
+                if frame_exist_page[y, x] != 0:
+                    page_type = False
+                    break
+            if not page_type:
+                break
+        if page_type:
+            return True
+        
+        # 左端チェック
+        page_type = True
+        for y in range(h):
+            for x in range(3, BLACK_LENGTH_TH):
+                if frame_exist_page[y, x] != 0:
+                    page_type = False
+                    break
+            if not page_type:
+                break
+        
+        return page_type
+    
+    def find_frame_area(self, input_page_image: np.ndarray) -> np.ndarray:
+        """
+        フレーム存在領域特定（C++のfindFrameArea相当）
+        """
+        # グレースケール変換
+        if len(input_page_image.shape) == 3:
+            gray = cv2.cvtColor(input_page_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = input_page_image
+        
+        # ガウシアンフィルタ
+        gaussian_img = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # 階調反転二値画像の生成
+        inverse_bin_img = cv2.bitwise_not(gaussian_img)
+        _, inverse_bin_img = cv2.threshold(inverse_bin_img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        
+        h, w = inverse_bin_img.shape
+        
+        # 左右の除去 - ヒストグラム生成
+        histgram_lr = np.zeros(w, dtype=int)
+        
+        for y in range(h):
+            for x in range(w):
+                if x <= 2 or x >= w - 2 or y <= 2 or y >= h - 2:
+                    continue
+                if inverse_bin_img[y, x] > 0:
+                    histgram_lr[x] += 1
+        
+        # 左右境界検出
+        min_x_lr = 0
+        max_x_lr = w - 1
+        
+        for x in range(w):
+            if histgram_lr[x] > 0:
+                min_x_lr = x
+                break
+        
+        for x in range(w - 1, -1, -1):
+            if histgram_lr[x] > 0:
+                max_x_lr = x
+                break
+        
+        # 誤差は両端に寄せる
+        if min_x_lr < 6:
+            min_x_lr = 0
+        if max_x_lr > w - 6:
+            max_x_lr = w
+        
+        cut_page_img_lr = gray[0:h, min_x_lr:max_x_lr]
+        
+        # 上下の除去 - ヒストグラム生成
+        histgram_tb = np.zeros(h, dtype=int)
+        
+        for y in range(h):
+            for x in range(w):
+                if x <= 2 or x >= w - 2 or y <= 2 or y >= h - 2:
+                    continue
+                if inverse_bin_img[y, x] > 0:
+                    histgram_tb[y] += 1
+        
+        # 上下境界検出
+        min_y_tb = 0
+        max_y_tb = h - 1
+        
+        for y in range(h):
+            if histgram_tb[y] > 0:
+                min_y_tb = y
+                break
+        
+        for y in range(h - 1, -1, -1):
+            if histgram_tb[y] > 0:
+                max_y_tb = y
+                break
+        
+        # 誤差は両端に寄せる
+        if min_y_tb < 6:
+            min_y_tb = 0
+        if max_y_tb > cut_page_img_lr.shape[0] - 6:
+            max_y_tb = cut_page_img_lr.shape[0]
+        
+        cut_page_img = cut_page_img_lr[min_y_tb:max_y_tb, :]
+        
+        return cut_page_img
     
     def frame_detect(self, page: np.ndarray) -> List[Panel]:
         """
@@ -194,28 +412,19 @@ class MangaProcessor:
             if x + w > page.shape[1] - 6: w = page.shape[1] - x
             if y + h > page.shape[0] - 6: h = page.shape[0] - y
             
-            # RGBA変換
-            if len(page.shape) == 3:
-                rgba_page = cv2.cvtColor(page, cv2.COLOR_BGR2BGRA)
-            else:
-                rgba_page = cv2.cvtColor(page, cv2.COLOR_GRAY2BGRA)
+            # 四点座標を決定（C++版と同様の処理）
+            corners = Points(
+                Point(x, y),      # left-top
+                Point(x+w, y),    # right-top 
+                Point(x, y+h),    # left-bottom
+                Point(x+w, y+h)   # right-bottom
+            )
             
-            # マスク作成
-            mask = np.zeros(page.shape[:2], dtype=np.uint8)
-            cv2.drawContours(mask, [cnt], -1, 255, -1)
-            
-            # 透明化処理
-            alpha = rgba_page[:, :, 3]
-            alpha[mask == 0] = 0
+            # C++のcreateAlphaImage相当の処理
+            panel_img = self.create_alpha_image(page, corners)
             
             # 切り出し
-            panel_img = rgba_page[y:y+h, x:x+w].copy()
-            
-            # 角の座標（簡易版）
-            corners = Points(
-                Point(x, y), Point(x+w, y),
-                Point(x, y+h), Point(x+w, y+h)
-            )
+            panel_img = panel_img[y:y+h, x:x+w].copy()
             
             panel = Panel(
                 image=panel_img,
@@ -244,6 +453,30 @@ class MangaProcessor:
                 if en > 0.4:
                     cv2.drawContours(img, [cnt], -1, 0, -1)
     
+    def create_alpha_image(self, src_page: np.ndarray, definite_panel_point: Points) -> np.ndarray:
+        """
+        C++のcreateAlphaImage()に相当
+        四点座標を使用してピクセル単位でマスク処理
+        """
+        # RGBA変換
+        if len(src_page.shape) == 3:
+            rgba = cv2.cvtColor(src_page, cv2.COLOR_BGR2BGRA)
+        else:
+            rgba = cv2.cvtColor(src_page, cv2.COLOR_GRAY2BGRA)
+        
+        # 直線を更新
+        definite_panel_point.renew_line()
+        
+        # ピクセル単位で四角形外部を透明化
+        height, width = rgba.shape[:2]
+        for y in range(height):
+            for x in range(width):
+                point = Point(x, y)
+                if definite_panel_point.outside(point):
+                    rgba[y, x, 3] = 0  # アルファチャンネルを0に
+        
+        return rgba
+
     def judge_area_of_bounding_box(self, bbox: Tuple[int, int, int, int], page_area: int) -> bool:
         """
         バウンディングボックス面積判定
@@ -289,7 +522,7 @@ class MangaProcessor:
                 
             en = 4.0 * np.pi * area / (peri * peri)  # 円形度
             
-            # 面積と円形度フィルタ
+            # C++と同じ面積と円形度フィルタ
             if not (panel_area * 0.01 <= area < panel_area * 0.9 and en > 0.4):
                 continue
             
@@ -300,13 +533,15 @@ class MangaProcessor:
             center_x = x + w // 2
             center_y = y + h // 2
             
-            # マスク作成
-            mask = np.full(gray.shape, 255, dtype=np.uint8)
-            cv2.drawContours(mask, [cnt], -1, 0, 4)
-            cv2.drawContours(mask, [cnt], -1, 0, -1)
+            # マスク作成（C++と同じ処理）
+            mask = np.full(gray.shape, 255, dtype=np.uint8)  # 初期値255で初期化
+            cv2.drawContours(mask, [cnt], -1, 0, 4)  # 輪郭を太さ4で0（黒）で描画
+            cv2.drawContours(mask, [cnt], -1, 0, -1)  # 内部を0（黒）で塗りつぶし
             
-            # 背景グレー化
+            # C++のcopyTo処理を再現：マスクを使って背景をグレー（150）にする
             back_150 = np.full(gray.shape, 150, dtype=np.uint8)
+            masked_img = gray.copy()
+            # マスクが0（黒）の部分にback_150をコピー（C++のcopyTo処理）
             masked_img = np.where(mask == 0, back_150, gray)
             
             # 切り出し
@@ -466,8 +701,8 @@ class MangaProcessor:
         for i, image_path in enumerate(image_paths):
             print(f"Processing: {image_path}")
             
-            # 画像読み込み
-            img = cv2.imread(image_path)
+            # 画像読み込み（C++と同じグレースケール読み込み）
+            img = cv2.imread(image_path, 0)  # 0でグレースケール読み込み
             if img is None:
                 continue
             

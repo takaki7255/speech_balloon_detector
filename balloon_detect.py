@@ -4,9 +4,10 @@ import numpy as np
 def judge_area(area, thresh=50):
     return area > thresh
 
-img = cv2.imread('./../manga_109_all/collected_images/000325.jpg')
+# C++と同じグレースケール読み込み
+img = cv2.imread('./../manga_109_all/collected_images/000325.jpg', 0)
 #前処理
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+gray = img  # 既にグレースケールなので変換不要
 _, bin_img = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
 
 kernel = np.ones((3, 3), np.uint8)
@@ -28,7 +29,7 @@ balloons = []
 contours, _ = cv2.findContours(bin_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
 # 画像サイズを取得
-# panel_area = img.shape[0] * img.shape[1]
+panel_area = img.shape[0] * img.shape[1]
 
 for cnt in contours:
     area = cv2.contourArea(cnt)
@@ -37,13 +38,11 @@ for cnt in contours:
     # 周囲長が0の場合はスキップ
     if peri == 0:
         continue
-    
-    if not judge_area(area, thresh=50):
-        continue
+        
     en = 4.0 * np.pi * area / (peri * peri)  # 円形度
     
-    # C++の条件を参考にした面積とフィルタリング
-    if area >= 500 and area <= 100000:
+    # C++と同じ条件での面積と円形度フィルタリング
+    if panel_area * 0.01 <= area < panel_area * 0.9 and en > 0.4:
         # バウンディングボックスの取得
         bounding_box = cv2.boundingRect(cnt)
         x, y, w, h = bounding_box
@@ -52,13 +51,16 @@ for cnt in contours:
         center_x = x + w // 2
         center_y = y + h // 2
         
-        # マスク画像を作成
-        mask = np.zeros(gray.shape, dtype=np.uint8)
-        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        # マスク画像を作成（C++と同じ処理）
+        mask = np.full(gray.shape, 255, dtype=np.uint8)  # 初期値255で初期化
+        cv2.drawContours(mask, [cnt], -1, 0, 4)  # 輪郭を太さ4で0（黒）で描画
+        cv2.drawContours(mask, [cnt], -1, 0, -1)  # 内部を0（黒）で塗りつぶし
         
-        # グレー背景（150）で背景を埋める
+        # C++のcopyTo処理を再現：マスクを使って背景をグレー（150）にする
         back_150 = np.full(gray.shape, 150, dtype=np.uint8)
-        masked_img = np.where(mask == 255, gray, back_150)
+        masked_img = gray.copy()
+        # マスクが0（黒）の部分にback_150をコピー（C++のcopyTo処理）
+        masked_img = np.where(mask == 0, back_150, gray)
         
         # バウンディングボックスで切り出し
         cropped_region = masked_img[y:y+h, x:x+w]
@@ -94,8 +96,9 @@ for cnt in contours:
                 # マスクも切り出し
                 mask_roi = mask[y:y+h, x:x+w]
                 
-                # 背景を透明にした画像を作成（BGRAに変換）
-                balloon_rgba = cv2.cvtColor(balloon_roi, cv2.COLOR_BGR2BGRA)
+                # 背景を透明にした画像を作成（RGBAに変換）
+                # グレースケールからBGRAに変換
+                balloon_rgba = cv2.cvtColor(balloon_roi, cv2.COLOR_GRAY2BGRA)
                 balloon_rgba[:, :, 3] = mask_roi  # アルファチャンネルにマスクを設定
                 
                 balloons.append({
@@ -143,8 +146,8 @@ if len(balloons) > 0:
         2: "Zigzag"
     }
     
-    # 元画像に輪郭を描画
-    result_img = img.copy()
+    # 元画像に輪郭を描画（グレースケールからBGRに変換）
+    result_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     for i, balloon in enumerate(balloons):
         x, y, w, h = balloon['bbox']
         balloon_type = balloon['type']

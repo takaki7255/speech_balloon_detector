@@ -22,8 +22,8 @@ def test_single_image():
     # 出力ディレクトリ作成
     Path(output_dir).mkdir(exist_ok=True)
     
-    # 画像読み込み
-    img = cv2.imread(test_image_path)
+    # 画像読み込み（manga_processor.pyと同じグレースケール読み込み）
+    img = cv2.imread(test_image_path, 0)  # 0でグレースケール読み込み
     if img is None:
         print(f"Error: Cannot load image from {test_image_path}")
         return
@@ -95,7 +95,7 @@ def visualize_detection_steps():
     output_dir = "./debug_output"
     Path(output_dir).mkdir(exist_ok=True)
     
-    img = cv2.imread(test_image_path)
+    img = cv2.imread(test_image_path, 0)  # グレースケール読み込み
     if img is None:
         print(f"Error: Cannot load image from {test_image_path}")
         return

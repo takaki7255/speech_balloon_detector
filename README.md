@@ -4,11 +4,11 @@
 
 ## 概要
 
-C++の以下のファイル群をPythonで統合的に再現：
+C++の`cpp_original/`ディレクトリ内のファイル群をPythonで統合的に再現：
 - `main.cpp` - メイン処理フロー
 - `speechballoon_separation.cpp` - 吹き出し検出アルゴリズム  
 - `frame_separation.cpp` - フレーム検出アルゴリズム
-- その他関連ヘッダーファイル
+- その他関連処理ファイル
 
 ## 主な機能
 
@@ -24,11 +24,20 @@ speechBalloon_detector/
 ├── manga_processor.py          # メインの統合処理システム
 ├── test_manga_processor.py     # テスト用スクリプト
 ├── balloon_detect.py          # 単体の吹き出し検出（開発用）
+├── frame_separation.py         # フレーム検出のスタンドアロン版
 ├── test.py                    # 初期テストファイル
-├── speechballoon_separation.cpp # 元のC++コード
-├── frame_separation.cpp        # 元のC++コード
-├── main.cpp                   # 元のC++コード
-└── README.md                  # このファイル
+├── cpp_original/              # 元のC++コード群
+│   ├── main.cpp               # メイン処理フロー
+│   ├── speechballoon_separation.cpp  # 吹き出し検出アルゴリズム
+│   ├── frame_separation.cpp    # フレーム検出アルゴリズム
+│   ├── page_classification.cpp # ページ分類処理
+│   ├── twopage_to_onepage.cpp  # ページ分割処理
+│   ├── blackpage_framedetect.cpp # 黒ページ検出処理
+│   ├── page_removing_frame.cpp # フレーム除去処理
+│   └── read_file_path.cpp     # ファイル読み込み処理
+├── output/                    # 処理結果出力フォルダ
+├── test_output/              # テスト結果フォルダ
+└── README.md                 # このファイル
 ```
 
 ## 使用方法
