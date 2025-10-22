@@ -415,13 +415,8 @@ class MangaProcessor:
             if x + w > original_page.shape[1] - 6: w = original_page.shape[1] - x
             if y + h > original_page.shape[0] - 6: h = original_page.shape[0] - y
             
-            # 四点座標を決定（C++版と同様の処理）
-            corners = Points(
-                Point(x, y),      # left-top
-                Point(x+w, y),    # right-top 
-                Point(x, y+h),    # left-bottom
-                Point(x+w, y+h)   # right-bottom
-            )
+            # C++版と同様の輪郭近似と四隅座標決定
+            corners = self.define_panel_corners(cnt, bbox, original_page.shape)
             
             # 元画像からパネルを切り出し（吹き出しが塗りつぶされていない）
             panel_img = self.create_alpha_image(original_page, corners)
@@ -456,6 +451,58 @@ class MangaProcessor:
                 if en > 0.4:
                     cv2.drawContours(img, [cnt], -1, 0, -1)
     
+    def define_panel_corners(self, contour: np.ndarray, bbox: Tuple[int, int, int, int], 
+                           page_shape: Tuple[int, int]) -> Points:
+        """
+        C++版のdefinePanelCorners()に相当
+        バウンディングボックスの角から最も近い輪郭点を四隅座標に決定
+        """
+        x, y, w, h = bbox
+        
+        # バウンディングボックスの四隅
+        bb_lt = Point(x, y)      # left-top
+        bb_rt = Point(x+w, y)    # right-top
+        bb_lb = Point(x, y+h)    # left-bottom
+        bb_rb = Point(x+w, y+h)  # right-bottom
+        
+        # 輪郭を多角形近似（C++のapproxPolyDP相当）
+        epsilon = 6  # C++版と同じ値
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        approx_points = [Point(pt[0][0], pt[0][1]) for pt in approx]
+        
+        # 各角に最も近い輪郭点を探索
+        def find_nearest_point(target_point: Point, candidates: List[Point]) -> Point:
+            min_dist = float('inf')
+            nearest_point = target_point
+            
+            for candidate in candidates:
+                dist = ((target_point.x - candidate.x) ** 2 + 
+                       (target_point.y - candidate.y) ** 2) ** 0.5
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_point = candidate
+            
+            return nearest_point
+        
+        # 四隅の座標を決定
+        definite_lt = find_nearest_point(bb_lt, approx_points)
+        definite_rt = find_nearest_point(bb_rt, approx_points)
+        definite_lb = find_nearest_point(bb_lb, approx_points)
+        definite_rb = find_nearest_point(bb_rb, approx_points)
+        
+        # 端に寄せる処理（C++のalign2edge相当）
+        th_edge = 6
+        if definite_lt.x < th_edge: definite_lt.x = 0
+        if definite_lt.y < th_edge: definite_lt.y = 0
+        if definite_rt.x > page_shape[1] - th_edge: definite_rt.x = page_shape[1]
+        if definite_rt.y < th_edge: definite_rt.y = 0
+        if definite_lb.x < th_edge: definite_lb.x = 0
+        if definite_lb.y > page_shape[0] - th_edge: definite_lb.y = page_shape[0]
+        if definite_rb.x > page_shape[1] - th_edge: definite_rb.x = page_shape[1]
+        if definite_rb.y > page_shape[0] - th_edge: definite_rb.y = page_shape[0]
+        
+        return Points(definite_lt, definite_rt, definite_lb, definite_rb)
+
     def create_alpha_image(self, src_page: np.ndarray, definite_panel_point: Points) -> np.ndarray:
         """
         C++のcreateAlphaImage()に相当
