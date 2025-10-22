@@ -336,11 +336,14 @@ class MangaProcessor:
         """
         panels = []
         
-        # グレースケール変換
+        # 元画像を保存（パネル切り出しに使用）
+        original_page = page.copy()
+        
+        # グレースケール変換（処理用）
         if len(page.shape) == 3:
             gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
         else:
-            gray = page
+            gray = page.copy()  # 元画像を変更しないようにコピー
             
         # 吹き出し検出用の二値化
         _, bin_img = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
@@ -350,7 +353,7 @@ class MangaProcessor:
         # 吹き出し輪郭検出
         contours, _ = cv2.findContours(bin_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         
-        # 吹き出し除去（塗りつぶし）
+        # 吹き出し除去（塗りつぶし）- 処理用画像のみ
         self.extract_speech_balloon(contours, gray)
         
         # ガウシアンフィルタ
@@ -398,19 +401,19 @@ class MangaProcessor:
         # 最終輪郭検出
         final_contours, _ = cv2.findContours(complement_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # パネル抽出
+        # パネル抽出（元画像から切り出し）
         for i, cnt in enumerate(final_contours):
             bbox = cv2.boundingRect(cnt)
             x, y, w, h = bbox
             
-            if not self.judge_area_of_bounding_box(bbox, page.shape[0] * page.shape[1]):
+            if not self.judge_area_of_bounding_box(bbox, original_page.shape[0] * original_page.shape[1]):
                 continue
                 
             # 端に寄せる処理
             if x < 6: x = 0
             if y < 6: y = 0
-            if x + w > page.shape[1] - 6: w = page.shape[1] - x
-            if y + h > page.shape[0] - 6: h = page.shape[0] - y
+            if x + w > original_page.shape[1] - 6: w = original_page.shape[1] - x
+            if y + h > original_page.shape[0] - 6: h = original_page.shape[0] - y
             
             # 四点座標を決定（C++版と同様の処理）
             corners = Points(
@@ -420,8 +423,8 @@ class MangaProcessor:
                 Point(x+w, y+h)   # right-bottom
             )
             
-            # C++のcreateAlphaImage相当の処理
-            panel_img = self.create_alpha_image(page, corners)
+            # 元画像からパネルを切り出し（吹き出しが塗りつぶされていない）
+            panel_img = self.create_alpha_image(original_page, corners)
             
             # 切り出し
             panel_img = panel_img[y:y+h, x:x+w].copy()
