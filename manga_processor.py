@@ -362,6 +362,9 @@ class MangaProcessor:
         # 二値化（反転）
         _, inverse_bin = cv2.threshold(gaussian_img, 210, 255, cv2.THRESH_BINARY_INV)
         
+        # コマ存在領域推定（C++のfindFrameExistenceArea相当）
+        page_corners = self.find_frame_existence_area(inverse_bin)
+        
         # Cannyエッジ検出
         canny = cv2.Canny(gray, 120, 130, 3)
         
@@ -415,8 +418,8 @@ class MangaProcessor:
             if x + w > original_page.shape[1] - 6: w = original_page.shape[1] - x
             if y + h > original_page.shape[0] - 6: h = original_page.shape[0] - y
             
-            # C++版と同様の輪郭近似と四隅座標決定
-            corners = self.define_panel_corners(cnt, bbox, original_page.shape)
+            # C++版と同様の輪郭近似と四隅座標決定（ページ角判定を含む）
+            corners = self.define_panel_corners(cnt, bbox, original_page.shape, page_corners)
             
             # 元画像からパネルを切り出し（吹き出しが塗りつぶされていない）
             panel_img = self.create_alpha_image(original_page, corners)
@@ -451,11 +454,60 @@ class MangaProcessor:
                 if en > 0.4:
                     cv2.drawContours(img, [cnt], -1, 0, -1)
     
+    def find_frame_existence_area(self, inverse_bin_img: np.ndarray) -> Points:
+        """
+        C++版のfindFrameExistenceArea()に相当
+        コマ存在領域を推定してページの四隅座標を返す
+        """
+        rows, cols = inverse_bin_img.shape
+        
+        # ヒストグラム作成
+        histogram = np.zeros(cols, dtype=int)
+        
+        for y in range(rows):
+            for x in range(cols):
+                # 端を除外
+                if x <= 2 or x >= cols - 2 or y <= 2 or y >= rows - 2:
+                    continue
+                if inverse_bin_img[y, x] > 0:
+                    histogram[x] += 1
+        
+        # 左右境界検出
+        min_x = 0
+        max_x = cols - 1
+        
+        for x in range(cols):
+            if histogram[x] > 0:
+                min_x = x
+                break
+        
+        for x in range(cols - 1, -1, -1):
+            if histogram[x] > 0:
+                max_x = x
+                break
+        
+        # 誤差は両端に寄せる
+        if min_x < 6:
+            min_x = 0
+        if max_x > cols - 6:
+            max_x = cols
+        
+        # ページの四隅座標を設定
+        page_corners = Points(
+            Point(min_x, 0),      # left-top
+            Point(max_x, 0),      # right-top
+            Point(min_x, rows),   # left-bottom
+            Point(max_x, rows)    # right-bottom
+        )
+        
+        return page_corners
+    
     def define_panel_corners(self, contour: np.ndarray, bbox: Tuple[int, int, int, int], 
-                           page_shape: Tuple[int, int]) -> Points:
+                           page_shape: Tuple[int, int], page_corners: Points) -> Points:
         """
         C++版のdefinePanelCorners()に相当
         バウンディングボックスの角から最も近い輪郭点を四隅座標に決定
+        ページ角に近い場合はページ角を優先
         """
         x, y, w, h = bbox
         
@@ -470,25 +522,35 @@ class MangaProcessor:
         approx = cv2.approxPolyDP(contour, epsilon, True)
         approx_points = [Point(pt[0][0], pt[0][1]) for pt in approx]
         
-        # 各角に最も近い輪郭点を探索
-        def find_nearest_point(target_point: Point, candidates: List[Point]) -> Point:
+        # 各角に最も近い輪郭点を探索（ページ角判定を含む）
+        def find_nearest_point_with_page_corner(bb_point: Point, page_corner: Point, 
+                                               candidates: List[Point]) -> Point:
+            # ページ角との距離を計算
+            page_corner_dist = ((bb_point.x - page_corner.x) ** 2 + 
+                               (bb_point.y - page_corner.y) ** 2) ** 0.5
+            
+            # ページ角に近い場合（8px以内）はページ角を使用
+            if page_corner_dist < 8:
+                return page_corner
+            
+            # そうでない場合は最も近い輪郭点を探索
             min_dist = float('inf')
-            nearest_point = target_point
+            nearest_point = bb_point
             
             for candidate in candidates:
-                dist = ((target_point.x - candidate.x) ** 2 + 
-                       (target_point.y - candidate.y) ** 2) ** 0.5
+                dist = ((bb_point.x - candidate.x) ** 2 + 
+                       (bb_point.y - candidate.y) ** 2) ** 0.5
                 if dist < min_dist:
                     min_dist = dist
                     nearest_point = candidate
             
             return nearest_point
         
-        # 四隅の座標を決定
-        definite_lt = find_nearest_point(bb_lt, approx_points)
-        definite_rt = find_nearest_point(bb_rt, approx_points)
-        definite_lb = find_nearest_point(bb_lb, approx_points)
-        definite_rb = find_nearest_point(bb_rb, approx_points)
+        # 四隅の座標を決定（ページ角判定を含む）
+        definite_lt = find_nearest_point_with_page_corner(bb_lt, page_corners.lt, approx_points)
+        definite_rt = find_nearest_point_with_page_corner(bb_rt, page_corners.rt, approx_points)
+        definite_lb = find_nearest_point_with_page_corner(bb_lb, page_corners.lb, approx_points)
+        definite_rb = find_nearest_point_with_page_corner(bb_rb, page_corners.rb, approx_points)
         
         # 端に寄せる処理（C++のalign2edge相当）
         th_edge = 6
